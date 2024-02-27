@@ -1,75 +1,130 @@
 apply plugin: 'com.android.library'
+apply plugin: 'maven-publish'
 
 android {
-    compileSdkVersion 34
+  compileSdkVersion 34
 
-    defaultConfig {
-        minSdkVersion 14
-        versionCode 1806
-        versionName "18.6"
-    }
+  defaultConfig {
+    minSdkVersion 14
+    versionCode 1806
+    versionName "18.6"
+  }
 
-    // 使用 JDK 1.8
-    compileOptions {
-        targetCompatibility JavaVersion.VERSION_1_8
-        sourceCompatibility JavaVersion.VERSION_1_8
-    }
+  // 使用 JDK 1.8
+  compileOptions {
+    targetCompatibility JavaVersion.VERSION_1_8
+    sourceCompatibility JavaVersion.VERSION_1_8
+  }
 
-    lintOptions {
-        abortOnError false
-    }
+  lintOptions {
+    abortOnError false
+  }
 
-    android.libraryVariants.configureEach { variant ->
-        // aar 输出文件名配置
-        variant.outputs.configureEach { output ->
-            outputFileName = "${rootProject.name}-${android.defaultConfig.versionName}.aar"
-        }
+  android.libraryVariants.configureEach { variant ->
+    // aar 输出文件名配置
+    variant.outputs.configureEach { output ->
+      outputFileName = "${rootProject.name}-${android.defaultConfig.versionName}.aar"
     }
+  }
 
-    packagingOptions {
-        // 剔除这个包下的所有文件（不会移除签名信息）
-        exclude 'META-INF/*******'
-    }
+  packagingOptions {
+    // 剔除这个包下的所有文件（不会移除签名信息）
+    exclude 'META-INF/*******'
+  }
 }
 
 afterEvaluate {
-    // 排除 BuildConfig.class 和 R.class
-    generateReleaseBuildConfig.enabled = false
-    generateDebugBuildConfig.enabled = false
-    generateReleaseResValues.enabled = false
-    generateDebugResValues.enabled = false
+  // 排除 BuildConfig.class 和 R.class
+  generateReleaseBuildConfig.enabled = false
+  generateDebugBuildConfig.enabled = false
+  generateReleaseResValues.enabled = false
+  generateDebugResValues.enabled = false
 }
 
 dependencies {
-    // noinspection GradleCompatible
-    compileOnly 'com.android.support:support-fragment:24.2.0'
+  implementation 'androidx.fragment:fragment:1.5.5'
 }
 
-tasks.withType(Javadoc).configureEach {
-    // prevent Javadoc from failing gradle build：https://stackoverflow.com/questions/35435173/prevent-javadoc-from-failing-gradle-build
-    failOnError false
-    options.addStringOption('Xdoclint:none', '-quiet')
-    options.addStringOption('encoding', 'UTF-8')
-    options.addStringOption('charSet', 'UTF-8')
+task sourcesJar(type: Jar) {
+  from android.sourceSets.main.java.srcDirs
+  classifier = 'sources'
 }
 
-tasks.register('sourcesJar', Jar) {
-    from android.sourceSets.main.java.srcDirs
-    classifier = 'sources'
+afterEvaluate {
+  getTasks().configureEach { Task t ->
+    if (t.name == "publishReleasePublicationToFuryRepoRepository" || t.name == "publishReleasePublicationToMavenLocal") {
+      t.dependsOn(getTasks().named("sourcesJar"))
+      t.dependsOn(getTasks().named("assembleRelease"))
+    }
+  }
+
+  publishing {
+    publications {
+      release(MavenPublication) {
+        groupId = "pub.fury"
+        artifactId = "xxpermission"
+        version = "18.6"
+        afterEvaluate {
+          from components.release
+        }
+        artifact sourcesJar
+      }
+    }
+
+    repositories {
+      maven {
+        name = "furyRepo"
+        url = "https://repo.fury.pub/releases"
+        credentials {
+          username = "${furyRepoUsername}"
+          password = "${furyRepoPassword}"
+        }
+      }
+    }
+  }
 }
 
-tasks.register('javadoc', Javadoc) {
-    source = android.sourceSets.main.java.srcDirs
-    classpath += project.files(android.getBootClasspath().join(File.pathSeparator))
+def gradlew = rootProject.file('gradlew').absolutePath
+
+tasks.register('publishToRepo') {
+  doFirst {
+    println "$project.name publish to repo begin"
+  }
+  doLast {
+    def name = project.name
+    execCmdSync "$gradlew :$name:clean :$name:publishReleasePublicationToFuryRepoRepository"
+  }
 }
 
-tasks.register('javadocJar', Jar) {
-    dependsOn javadoc
-    classifier = 'javadoc'
-    from javadoc.destinationDir
+tasks.register('publishToLocal') {
+  doFirst {
+    println "$project.name publish to maven local begin"
+  }
+  doLast {
+    def name = project.name
+    execCmdSync "$gradlew :$name:clean :$name:publishReleasePublicationToMavenLocal"
+  }
 }
 
-artifacts {
-    archives javadocJar
-    archives sourcesJar
+boolean execCmdSync(String cmdString) {
+  execCmdSync(cmdString, false)
+}
+
+boolean execCmdSync(String cmdString, boolean log) {
+//	println "command to be executed: [${cmdString}]"
+  Process process = new ProcessBuilder(cmdString.split(' '))
+    .directory(rootProject.rootDir)
+    .redirectErrorStream(true)
+    .start()
+  process.inputStream.eachLine {
+    println it
+  }
+  process.waitFor()
+  if (process.exitValue() != 0) {
+    println "command executed failed: ${cmdString} . exit=${process.exitValue()}"
+    return false
+  } else {
+    println "command executed success: ${cmdString}"
+    return true
+  }
 }
